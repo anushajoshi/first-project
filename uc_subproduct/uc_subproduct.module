@@ -1,0 +1,1606 @@
+<?php
+// $Id: uc_subproduct.module,v 1.4 2010/12/15 21:22:44 larowlan Exp $
+/*
+ * @file uc_subproduct.module
+ * Provides node reference formatter to allow creation of parent products using nodereference fields
+ * @copyright Copyright(c) 2010 Lee Rowlands
+ * @license GPL v2 http://www.fsf.org/licensing/licenses/gpl.html
+ * @author Lee Rowlands leerowlands at rowlands-bcs dot com
+ *
+ */
+
+/**
+ * Implementation of hook_menu().
+ */
+function uc_subproduct_menu() {
+  //generic ahah handler, append args to return specific form elements
+  $items['uc-subproduct/ahah'] = array(
+    'title'            => 'UC Sub product generic ahah handler',
+    'page callback'    => 'uc_subproduct_ahah',
+    'access arguments' => array('Setup UC Sub Product displays'), 
+    'type'             => MENU_CALLBACK
+  );
+
+  $items['admin/store/settings/uc-subproduct'] = array(
+    'title'            => 'UC Sub Product stock settings',
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('uc_subproduct_admin_form'),
+    'access arguments' => array('Administer UC Sub Product'),
+    'type'             => MENU_NORMAL_ITEM
+  );
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_perm
+*/
+
+/*function uc_subproduct_perm() {
+  return array('Administer UC Sub Product', 'Setup UC Sub Product displays');
+}*/
+
+function uc_subproduct_permission() {
+  return array(
+	'Administer UC Sub Product' => array(
+		'title' => t('Administer UC Sub Product'),
+		'description' => t('Perform maintenance tasks for UC Sub Product'),
+	),
+  );
+}
+
+/**
+ * Implementation of hook_nodeapi().
+ * We collect the cck fields to be displayed in the table here
+ */
+ function uc_subproduct_node_delete(){
+	 // The node is being deleted.
+      db_query("DELETE FROM {uc_subproduct_display} WHERE vid = %d", $node->vid);
+ }
+ 
+ function uc_subproduct_node_insert(){
+	 if (variable_get('uc_subproduct_enabled_'. $node->type, FALSE)) {
+        // The node is being created or updated (inserted in the database).
+        db_query("DELETE FROM {uc_subproduct_display} WHERE vid = %d", $node->vid);
+        foreach ($node->uc_subproduct_display as $field => $details) {
+          $record = array(
+            'nid' => $node->nid,
+            'vid' => $node->vid,
+            'weight' => $details['weight'],
+            'field' => $details['field'],
+            'title' => $details['title']
+          );
+          drupal_write_record('uc_subproduct_display', $record);
+        }
+
+        if (variable_get('uc_subproduct_product_'. $node->type, FALSE)) {
+          //now we put the product in uc_product so catalogs continue to work as expected
+          //get the 'from price'
+          db_query("DELETE FROM {uc_products} WHERE vid = %d", $node->vid);
+          $node->sell_price = uc_subproduct_get_from_price($node);
+          //write the record
+          $node->unique_hash = md5($node->vid . $node->nid . $node->model . $node->list_price . $node->cost . $node->sell_price . $node->weight . $node->weight_units . $node->dim_length . $node->dim_width . $node->dim_height . $node->length_units . $node->pkg_qty . $node->default_qty . $node->shippable . time());
+          drupal_write_record('uc_products', $node);
+        }
+      }
+      elseif ($node->type == 'product') {
+        /*we need to see if any of these are part of a parent product
+        and update the parent product 'from price'*/
+        $referenced_in = uc_subproduct_get_referenced_in($node);
+        foreach ($referenced_in as $nid => $title) {
+          $referer = node_load($nid);
+          if (variable_get('uc_subproduct_product_'. $referer->type, FALSE)) {
+            $sell_price = uc_subproduct_get_from_price($referer);
+            //write the record
+            $unique_hash = md5($referer->vid . $referer->nid . $referer->model . $referer->list_price . $referer->cost . $referer->sell_price . $referer->weight . $referer->weight_units . $referer->dim_length . $referer->dim_width . $referer->dim_height . $referer->length_units . $referer->pkg_qty . $referer->default_qty . $referer->shippable . time());
+            db_query("UPDATE {uc_products} SET sell_price = %f, unique_hash = '%s'
+                     WHERE nid = %d", $sell_price, $unique_hash, $referer->nid);
+          }
+        }
+      }
+ }
+ 
+ function uc_subproduct_node_update(){
+	 if (variable_get('uc_subproduct_enabled_'. $node->type, FALSE)) {
+        // The node is being created or updated (inserted in the database).
+        db_query("DELETE FROM {uc_subproduct_display} WHERE vid = %d", $node->vid);
+        foreach ($node->uc_subproduct_display as $field => $details) {
+          $record = array(
+            'nid' => $node->nid,
+            'vid' => $node->vid,
+            'weight' => $details['weight'],
+            'field' => $details['field'],
+            'title' => $details['title']
+          );
+          drupal_write_record('uc_subproduct_display', $record);
+        }
+
+        if (variable_get('uc_subproduct_product_'. $node->type, FALSE)) {
+          //now we put the product in uc_product so catalogs continue to work as expected
+          //get the 'from price'
+          db_query("DELETE FROM {uc_products} WHERE vid = %d", $node->vid);
+          $node->sell_price = uc_subproduct_get_from_price($node);
+          //write the record
+          $node->unique_hash = md5($node->vid . $node->nid . $node->model . $node->list_price . $node->cost . $node->sell_price . $node->weight . $node->weight_units . $node->dim_length . $node->dim_width . $node->dim_height . $node->length_units . $node->pkg_qty . $node->default_qty . $node->shippable . time());
+          drupal_write_record('uc_products', $node);
+        }
+      }
+      elseif ($node->type == 'product') {
+        /*we need to see if any of these are part of a parent product
+        and update the parent product 'from price'*/
+        $referenced_in = uc_subproduct_get_referenced_in($node);
+        foreach ($referenced_in as $nid => $title) {
+          $referer = node_load($nid);
+          if (variable_get('uc_subproduct_product_'. $referer->type, FALSE)) {
+            $sell_price = uc_subproduct_get_from_price($referer);
+            //write the record
+            $unique_hash = md5($referer->vid . $referer->nid . $referer->model . $referer->list_price . $referer->cost . $referer->sell_price . $referer->weight . $referer->weight_units . $referer->dim_length . $referer->dim_width . $referer->dim_height . $referer->length_units . $referer->pkg_qty . $referer->default_qty . $referer->shippable . time());
+            db_query("UPDATE {uc_products} SET sell_price = %f, unique_hash = '%s'
+                     WHERE nid = %d", $sell_price, $unique_hash, $referer->nid);
+          }
+        }
+      }
+ }
+ 
+function uc_subproduct_node_load(){
+	$extra = array();
+      if (variable_get('uc_subproduct_enabled_'. $node->type, FALSE)) {
+        // The node is about to be loaded from the database. This hook
+        // can be used to load additional data at this time.
+        $displays = array();
+        $res = db_query("SELECT weight, field, title
+                        FROM {uc_subproduct_display}
+                        WHERE vid = %d
+                        ORDER BY weight", $node->vid);
+        while ($display = db_fetch_array($res)) {
+          $displays[$display['field']] = $display;
+        }
+        $extra['uc_subproduct_display'] = $displays;
+      }
+      if (variable_get('uc_subproduct_product_'. $node->type, FALSE)) {
+        $extra['sell_price'] = uc_subproduct_get_from_price($node);
+      }
+      return $extra;
+}
+ function uc_subproduct_node_validate(){
+	 // The user has just finished editing the node and is
+      // trying to preview or submit it. This hook can be used to check
+      // the node data. Errors should be set with form_set_error().
+      if (!variable_get('uc_subproduct_enabled_'. $node->type, FALSE)) {
+        if ($node->uc_subproduct_display && is_array($node->uc_subproduct_display)) {
+          foreach ($node->uc_subproduct_display as $field => $display) {
+            if (!is_numeric($display['weight'])) {
+              form_set_error('uc_subproduct_display]['. $field .'][weight', t('You must provide a numeric weight'));
+            }
+          }
+        }
+      }
+ }
+ function uc_subproduct_node_view(){
+	 //drop in the image field if necessary
+      if (module_exists('imagecache') && ($field = variable_get('uc_image_'. $node->type, '')) && isset($node->$field) && file_exists($node->{$field}[0]['filepath'])
+          && variable_get('uc_subproduct_product_'. $node->type, FALSE)) {
+        $enabled = uc_product_field_enabled();
+        $weight = variable_get('uc_product_field_weight', array(
+          'image' => -2,
+          'display_price' => -1,
+          'model' => 0,
+          'list_price' => 2,
+          'cost' => 3,
+          'sell_price' => 4,
+          'weight' => 5,
+          'dimensions' => 6,
+          'add_to_cart' => 10,
+        ));
+
+        $node->content['image'] = array('#value' => theme('uc_product_image', $node->$field, $teaser, $page),
+          '#access' => $enabled['image'],
+          '#weight' => $weight['image'],
+        );
+      }
+ }
+/*function uc_subproduct_nodeapi($nodes, $types) {
+  switch ($op) {
+    case 'insert':
+    case 'update':
+      break;
+    case 'load':
+      break;
+    case 'validate':
+      break;
+    case 'view':
+      break;
+  }
+}*/
+
+/**
+ * Implementation of hook_field_formatter_info().
+ * We define our add to cart form as a field formatter
+ */
+ /*correct*/
+function uc_subproduct_field_formatter_info() {
+  $formatters = array();
+  $formatters['cart_table_form'] = array(
+    'label' => 'UC Sub-product add to cart form',
+    'field types' => array('nodereference'),
+    'multiple values' => CONTENT_HANDLE_MODULE,
+  );
+  return $formatters;
+}
+
+/**
+ * Implementation of hook_theme().
+ */
+ /*correct*/
+function uc_subproduct_theme($existing, $type, $theme, $path) {
+  return array(
+    'uc_subproduct_formatter_cart_table_form' => array(
+      'variables' => array('element' => NULL),
+    ),
+    'uc_subproduct_cart_table_form' => array(
+      'variables' => array('form' => NULL),
+    ),
+    'uc_subproduct_form_items' => array(
+      'variables' => array('form' => NULL),
+    ),
+    'uc_subproduct_reduced_price' => array(
+      'variables' => array('sell_price' => NULL,
+                           'list_price' => NULL),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_content_build_modes
+*/
+/*later*/
+function uc_subproduct_content_build_modes() {
+  return array(
+    'uc_subproduct' => array(
+      'title' => t('UC Sub Product'),
+      'build modes' => array(
+        'uc_subproduct' => array(
+          'title' => t('UC Sub Product'),
+          'views style' => FALSE,
+        ),
+      ),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_form_alter().
+ */
+ /*correct*/
+function uc_subproduct_form_alter(&$form, &$form_state, $form_id) {
+  /*here we provide the checkbox on the submission form settings pane
+   of the node type form, allowing the user to choose their fields*/
+  if ($form_id == 'node_type_form') {
+    $type = $form['#node_type']->type;
+    $form['submission']['uc_subproduct_enabled'] = array(
+      '#type'          => 'checkbox',
+      '#value'         => t('Setup display fields for UC Sub-product'),
+      '#description'   => t("Setup the display settings including fields and order for UC Sub-product for nodes of this type?"),
+      '#default_value' => variable_get('uc_subproduct_enabled_'. $type, FALSE)
+    );
+    $form['submission']['uc_subproduct_product'] = array(
+      '#type'          => 'checkbox',
+      '#value'         => t('Treat this node type as an Ubercart product'),
+      '#description'   => t("Enable this to have Ubercart treat nodes of this type as products. " /*This means if you configure your taxonomy correctly your
+                            product will show in the catalog. */ ."If you add an imagefield to the node type, images will be displayed as per Ubercart images."),
+      '#default_value' => variable_get('uc_subproduct_product_'. $type, FALSE)
+    );
+  }
+
+  //here we add the fields to the node edit form if the flag is enabled
+  if (isset($form['type']['#value']) && $form['type']['#value'] .'_node_form' == $form_id) {
+    // Add the twitter search fields on the Node edit form
+    $node = $form['#node'];
+    if (variable_get('uc_subproduct_enabled_'. $node->type, FALSE)) {
+      _uc_subproduct_node_form($form, $form_state, $node);
+    }
+  }
+}
+
+/**
+ * Implementation of hook_uc_subproduct_fields
+*/
+/*correct*/
+function uc_subproduct_uc_subproduct_fields($node) {
+  $fields = array();
+  //get cck fields
+  $type_info = content_types('product'); //we only care about uc_product nodes
+  foreach ($type_info['fields'] as $field_name => $field) {
+    $fields[$field_name] = check_plain($field['widget']['label']);
+  }
+
+  //other Ubercart fields
+  $fields['sell_price'] = t('Sell price');
+  $fields['model'] = t('Model/SKU');
+  $fields['reduced_price'] = t('Reduced price');
+  $fields['list_price'] = t('List price');
+  $fields['dimensions'] = t('Product Dimensions');
+  $fields['weight'] = t('Product Weight');
+  if (module_exists('uc_attribute')) {
+    $fields['attributes'] = t('Attributes');
+  }
+
+  if (module_exists('uc_stock')) {
+    $fields['stock'] = t('Stock Level');
+  }
+
+  //add basics
+  $fields['title'] = t('Title');
+  $fields['quantity'] = t('Quantity');
+  $fields['cart'] = t('Add to cart');
+
+  return $fields;
+}
+
+/**
+ * Implementation of hook_uc_subproduct_formatter
+ * @param $field
+*/
+/*correct*/
+function uc_subproduct_uc_subproduct_formatter($field, $node) {
+  //get cck fields
+  $type_info = content_types('product'); //we only care about uc_product nodes
+  $cck = FALSE;
+  foreach ($type_info['fields'] as $field_name => $cck_field) {
+    if ($field_name == $field) {
+      $cck = TRUE;
+      break;
+    }
+  }
+  //take a clone so we can call drupal render without adverse effect
+  $clone = drupal_clone($node);
+  if ($cck) {
+    drupal_render($clone->content[$field]);
+    return $clone->content[$field]['#children'] ? $clone->content[$field]['#children'] : '';
+  }
+  else {
+    $clone->content['list_price']['#access'] = ($clone->list_price == 0 ? FALSE : TRUE);
+    //temporarily make this visible - else why would we put it in the table!
+    $clone->content['sell_price']['#access'] = TRUE;
+    switch ($field) {
+      case 'list_price':
+      case 'sell_price':
+      case 'weight':
+      case 'model':
+      case 'dimensions':
+        return drupal_render($clone->content[$field]);
+        break;
+
+      case 'reduced_price':
+        return theme('uc_subproduct_reduced_price',
+                     drupal_render($clone->content['sell_price']),
+                     drupal_render($clone->content['list_price']));
+        break;
+
+      case 'title':
+        return check_plain($node->title);
+        break;
+
+      case 'stock':
+        $types = array('out_of_stock' => t('1-2 Weeks'),
+                   'back_order' => t('3-4 Weeks'),
+                   'in_stock' => t('In stock'));
+        $messages = array();
+        foreach ($types as $key => $message) {
+          $messages[$key] = variable_get('uc_subproduct_'. $key .'_message', $message);
+        }
+        foreach ($node->stock_levels as $model => $level) {
+          if ($level !== FALSE) {
+            if (!isset($min)) {
+              $min = $max = $level;
+            }
+            else {
+              $min = min($min, $level);
+              $max = max($max, $level);
+            }
+          }
+        }
+        //we now have $min and $max level;
+        $display_min = _uc_subproduct_stock_message($min);
+        $message = $messages['in_stock']; //assume in stock if not tracked
+        if (isset($min)) {
+          if ($min == $max) {
+            $message = $messages[$display_min];
+          }
+          else {
+            $display_max = _uc_subproduct_stock_message($max);
+            $message = t('Varies: !min - !max', array(
+              '!min' => $messages[$display_min],
+              '!max' => $messages[$display_max]
+            ));
+          }
+        }
+        return check_plain($message);
+        break;
+    }
+  }
+
+}
+
+/**
+ * Implementation of hook_product_types
+*/
+/*correct*/
+function uc_subproduct_product_types() {
+  $types = node_get_types('types');
+  $products = array();
+  foreach ($types as $name => $type) {
+    if (variable_get('uc_subproduct_product_'. $name, FALSE)) {
+      $products[] = $name;
+    }
+  }
+  return $products;
+}
+
+/**
+ * Implementation of hook_theme_registry_alter().
+ */
+ /*correct*/
+function uc_subproduct_theme_registry_alter(&$theme_registry) {
+  $theme_registry['uc_catalog_products']['function'] = 'theme_uc_subproduct_catalog_products';
+  $theme_registry['uc_catalog_product_grid']['function'] = 'theme_uc_subproduct_catalog_product_grid';
+}
+
+/**
+ * Implementation of hook_forms
+*/
+/*correct*/
+function uc_subproduct_forms($form_id, $args) {
+  $forms = array();
+  if (is_object($args[0]) && isset($args[0]->type)) {
+    $node = $args[0];
+    $types = uc_subproduct_get_types();
+    if (in_array($node->type, $types)) {
+      $forms['uc_subproduct_add_to_cart_form_'. $node->nid] = array('callback' => 'uc_subproduct_add_to_cart_form');
+    }
+  }
+  return $forms;
+
+}
+/**
+ * -----------------------------------------------------------------------------
+ * Theme functions
+ * -----------------------------------------------------------------------------
+*/
+
+/**
+ * Default implementation of theme_uc_subproduct_catalog_product_grid
+ * Overrides theme_uc_catalog_product_grid
+*/
+function theme_uc_subproduct_catalog_product_grid($products) {
+  $product_table = '<div class="category-grid-products"><table>';
+  $count = 0;
+  $context = array(
+    'revision' => 'themed',
+    'type' => 'product',
+  );
+  $types = uc_subproduct_get_types();
+  foreach ($products as $nid) {
+    $product = node_load($nid);
+    $context['subject'] = array('node' => $product);
+
+    if ($count == 0) {
+      $product_table .= "<tr>";
+    }
+    elseif ($count % variable_get('uc_catalog_grid_display_width', 3) == 0) {
+      $product_table .= "</tr><tr>";
+    }
+
+    $titlelink = l($product->title, "node/$nid", array('html' => TRUE));
+    if (module_exists('imagecache') && ($field = variable_get('uc_image_'. $product->type, '')) && isset($product->$field) && file_exists($product->{$field}[0]['filepath'])) {
+      $imagelink = l(theme('imagecache', 'product_list', $product->{$field}[0]['filepath'], $product->title, $product->title), "node/$nid", array('html' => TRUE));
+    }
+    else {
+      $imagelink = '';
+    }
+
+    $product_table .= '<td>';
+    if (variable_get('uc_catalog_grid_display_title', TRUE)) {
+      $product_table .= '<span class="catalog-grid-title">'. $titlelink .'</span>';
+    }
+    if (variable_get('uc_catalog_grid_display_model', TRUE) && !in_array($product->type, $types)) {
+      $product_table .= '<span class="catalog-grid-ref">'. $product->model .'</span>';
+    }
+    $product_table .= '<span class="catalog-grid-image">'. $imagelink .'</span>';
+    if (variable_get('uc_catalog_grid_display_sell_price', TRUE)) {
+      if (in_array($product->type, $types)) {
+        $product_table .= '<span class="catalog-grid-sell-price">'.
+                            t('From !price', array('!price' => uc_price($product->sell_price, $context)))
+                          .'</span>';
+      }
+      else {
+        $product_table .= '<span class="catalog-grid-sell-price">'. uc_price($product->sell_price, $context) .'</span>';
+      }
+    }
+    if (module_exists('uc_cart') && variable_get('uc_catalog_grid_display_add_to_cart', TRUE)) {
+      if (in_array($product->type, $types)) {
+        $product_table .= drupal_get_form('uc_subproduct_add_to_cart_form_'. $product->nid, $product);
+      }
+      else {
+        if (variable_get('uc_catalog_grid_display_attributes', TRUE)) {
+          $product_table .= theme('uc_product_add_to_cart', $product);
+        }
+        else {
+          $product_table .= drupal_get_form('uc_catalog_buy_it_now_form_'. $product->nid, $product);
+        }
+      }
+    }
+    $product_table .= '</td>';
+
+    $count++;
+  }
+  $product_table .= "</tr></table></div>";
+  return $product_table;
+}
+
+/**
+ * Default implemenetation of theme_uc_subproduct_catalog_products
+ * Overrides theme_uc_catalog_products
+*/
+function theme_uc_subproduct_catalog_products ($products) {
+  if (!$products) {
+    $output .= '<div class="no-products">'. t('No products are available in this category.') .'</div>';
+    return $output;
+  }
+  else {
+    if (variable_get('uc_catalog_grid_display', FALSE)) {
+      return theme('uc_catalog_product_grid', $products);
+    }
+    else {
+      $table = tapir_get_table('uc_product_table', $products);
+      return drupal_render($table);
+    }
+  }
+}
+
+/**
+ * Default implementation of theme_uc_subproduct_reduced_price
+ * @param $sell_price string xhtml of sell price (@see uc_product_view and @see theme_uc_product_price)
+ * @param $list_price string xhtml of list price (@see uc_product_view and @see theme_uc_product_price)
+ * @return html
+*/
+function theme_uc_subproduct_reduced_price($sell_price, $list_price) {
+  return '<div class="uc-subproduct-strikeout">'. $list_price .'</div>'. $sell_price;
+}
+
+/**
+ * Default implementation of theme_uc_subproduct_formatter_cart_table_form
+ * @param $element array FAPI form element to be rendered by formatter
+ *                 because we passed CONTENT_HANDLE_MODULE we will get an array
+ *                 of the multiple elements here
+ * @return rendered xhtml
+ * @ingroup themeable
+*/
+function theme_uc_subproduct_formatter_cart_table_form($element) {
+  $nodes = array();
+  foreach (element_children($element) as $key) {
+    if (($nid = $element[$key]['#item']['nid']) && is_numeric($nid) &&
+        ($node = node_load($nid)) && uc_product_is_product($node)) { // we don't allow non products
+      $node->build_mode = 'uc_subproduct';
+      if (module_exists('uc_stock')) {
+        $node->models = uc_product_get_models($node, FALSE);
+        $node->stock_levels = array();
+        foreach ($node->models as $model) {
+          $node->stock_levels[$model] = uc_stock_level($model);
+        }
+      }
+      $node = node_build_content($node, FALSE, FALSE);
+      $nodes[$nid] = $node;
+    }
+  }
+  return drupal_get_form('uc_subproduct_cart_table_form', $element['#node'], $nodes);
+}
+
+/**
+ * Default implementation of theme_uc_subproduct_cart_table_form
+ * Themes the fields as a table
+ * @param $form array the form array
+ * @return rendered xhtml
+ * @see uc_subproduct_cart_table_form
+ * @ingroup themeable
+ *
+*/
+function theme_uc_subproduct_cart_table_form($form) {
+  drupal_add_css(drupal_get_path('module', 'uc_subproduct') .'/uc_subproduct.css');
+
+  $header = $form['#display']['headers'];
+
+  // Altered by Inwinder @01.Feb.2012
+  $finalrows = array();
+  $rows0 = array();
+  $rows1 = array();
+  $rows2 = array();
+  $rows3 = array();
+  $rows4 = array();
+  $rows5 = array();    // Add by Vivek 6th December 2012
+  $finalrows1 = array();
+  $finalrows2 = array();
+  $finalrows3 = array();
+  $finalrows4 = array();
+  $finalrows5 = array();    // Add by Vivek 6th December 2012
+  
+  $col_count = count($headers);
+  
+  // Altered by Inwinder @01.Feb.2012
+  $rows1[] = array(array('data' => t('ATTACHMENTS'), 'colspan' => 5));
+  $rows2[] = array(array('data' => t('BAGS, FILTERS AND ACCESSORIES'), 'colspan' => 5));
+  $rows3[] = array(array('data' => t('WEAR ITEMS'), 'colspan' => 5));
+  $rows4[] = array(array('data' => t('SPARE PARTS'), 'colspan' => 5));    // Add by Vivek 6th December 2012
+  $rows5[] = array(array('data' => t('DUO-P POWDER & ACCESSORIES'), 'colspan' => 5));    // Add by Vivek 6th December 2012
+  
+  foreach (element_children($form['children']) as $nid) {
+    $row = array();
+    $node = $form['#nodes'][$nid];
+    foreach ($form['#display']['columns'] as $field => $format) {
+      if (in_array($field, array('cart', 'quantity', 'attributes'))) {
+        //add the form field
+        $row[] = array('data' => drupal_render($form['children'][$nid][$field]),
+            'class' => 'uc-subproduct-'. $field);
+      }
+      else {
+        //just a static field
+        if (function_exists($format) &&
+        ($output = $format($field, $node))) {
+          $row[] = array('data' => $output,
+            'class' => 'uc-subproduct-'. $field);
+        }
+        else {
+          //invalid formatter, or no value
+          $row[] = '&nbsp;';
+        }
+      }
+    }
+	//if ($node->field_category_name[0]['value'] != null) {
+	//$rows[$node->field_category_name[0]['value']] = array(array('data' => t($node->field_category_name[0]['value']), 'colspan' => 5));
+	//}
+	
+	
+	// Altered by Inwinder @01.Feb.2012
+    //$rows[] = $row;
+	if ($node->field_category_name[0]['value'] == '') {
+		$rows0[] = $row;
+	}
+	
+	if ($node->field_category_name[0]['value'] == 'ATTACHMENTS') {
+		$rows1[] = $row;
+	}
+	
+	if ($node->field_category_name[0]['value'] == "BAGS, FILTERS AND ACCESSORIES") {
+		$rows2[] = $row;
+	}
+	
+	if ($node->field_category_name[0]['value'] == "WEAR ITEMS") {
+		$rows3[] = $row;
+	}
+	// Add by Vivek 6th December 2012
+	if ($node->field_category_name[0]['value'] == "SPARE PARTS") {
+		$rows4[] = $row;
+	}
+	
+	if ($node->field_category_name[0]['value'] == "DUO-P POWDER & ACCESSORIES") {
+		$rows5[] = $row;
+	}
+  }
+  
+  // Altered by Inwinder @01.Feb.2012
+  if (count($rows1) > 1) {
+	$finalrows1 = $rows1;
+  }
+  if (count($rows2) > 1) {
+	$finalrows2 = $rows2;
+  }
+  if (count($rows3) > 1) {
+	$finalrows3 = $rows3;
+  }
+  if (count($rows4) > 1) {
+	$finalrows4 = $rows4;
+  }
+  // Add by Vivek 6th December 2012
+  if (count($rows5) > 1) {
+	$finalrows5 = $rows5;
+  }
+    
+  $finalrows = array_merge($rows0, $finalrows1, $finalrows2, $finalrows4, $finalrows5, $finalrows3); // Add by Vivek 6th December 2012
+
+  if (count($finalrows) == 0) {
+    $finalrows[] = array(array('data' => t('There are no subproducts enabled for this node'), 'colspan' => $col_count));
+  }
+	//print_r($form);
+  return theme('table', $header, $finalrows, array('class' => 'uc-subproduct-product-list')) . drupal_render($form);
+}
+
+
+/**
+ * Theme function for uc_subproduct display editing table.
+ *
+ * @ingroup themeable
+ */
+function theme_uc_subproduct_form_items($form) {
+  drupal_add_tabledrag('uc-subproduct-items-table',
+                       'order',
+                       'sibling',
+                       'uc-subproduct-item-weight-field');
+
+  $rows = array();
+  $headers = array(
+    t('Field'),
+    t('Weight'),
+    t('Title'),
+    t('Operations'),
+  );
+
+  foreach (element_children($form) as $key) {
+    $form[$key]['weight']['#attributes']['class'] = 'uc-subproduct-item-weight-field';
+    // Build the table row.
+    $row = array(
+      'data' => array(
+        array('data' => drupal_render($form[$key]['field_display']), 'class' => 'uc-subproduct-field'),
+        array('data' => drupal_render($form[$key]['weight']), 'class' => 'uc-subproduct-weight'),
+        array('data' => drupal_render($form[$key]['title']), 'class' => 'uc-subproduct-title'),
+        array('data' => drupal_render($form[$key]['remove']), 'class' => 'uc-subproduct-remove'),
+      ),
+      'class' => 'draggable'
+    );
+
+    $rows[] = $row;
+  }
+  //if no rows
+  if (!count($rows)) {
+    $rows[] = array(array('data' => t('There are no fields in the display yet, the node title and price will be used'), 'colspan' => 4));
+  }
+
+  $output .= theme('table', $headers, $rows, array('id' => 'uc-subproduct-items-table'));
+  $output .= drupal_render($form);
+
+  drupal_add_css(drupal_get_path('module', 'uc_subproduct') .'/uc_subproduct.css');
+
+  return $output;
+}
+
+/**
+ * -----------------------------------------------------------------------------
+ * Form Builders, Handlers
+ * -----------------------------------------------------------------------------
+*/
+
+/**
+ * Form builder for add to cart
+ * @param $form_state array std form state variable
+ * @param $node object node object
+*/
+function uc_subproduct_add_to_cart_form($form_state, $node) {
+  $form = array();
+  $form['#submit'] = array('uc_subproduct_add_to_cart_form_submit');
+  $form['nid'] = array('#type' => 'value', '#value' => $node->nid);
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' =>  variable_get('uc_product_add_to_cart_text', t('Add to cart')),
+    '#id' => 'edit-submit-'. $node->nid,
+    '#attributes' => array(
+      'class' => 'node-add-to-cart',
+    ),
+  );
+  return $form;
+}
+
+/**
+ * Handler for submit of add to cart form
+*/
+function uc_subproduct_add_to_cart_form_submit($form, &$form_state) {
+  drupal_set_message(t('This product has various options available, please choose your desired option from the table below.'));
+  $nid = $form_state['values']['nid'];
+  $form_state['redirect'] = 'node/'. $nid;
+}
+
+/**
+ * Form builder for admin screen
+*/
+function uc_subproduct_admin_form($form_state) {
+  $form = array();
+
+  $form['uc_subproduct_from_price'] = array(
+    '#type' => 'select',
+    '#title' => t('Catalog from price settings'),
+    '#default_value' => variable_get('uc_subproduct_from_price', 0),
+    '#options' => array(
+      '0' => t('Use price of first product'),
+      '1' => t('Use lowest price of child products')
+    ),
+    '#description' => t('How do you want to display the from price in the catalog for
+                        UC Sub Product items? Note that the first product is
+                        determined by considering the product ordering which can
+                        be set from the node editing form.'),
+  );
+
+  if (module_exists('uc_stock')) {
+    $types = array('out_of_stock' => array(t('Out of Stock'), t('1-2 Weeks')),
+                   'back_order' => array(t('Back order'), t('3-4 Weeks')),
+                   'in_stock' => array(t('In stock'), t('In stock')));
+    $form['stock'] = array(
+      '#type'         => 'fieldset',
+      '#collapsible'  => TRUE,
+      '#title'        => t('Stock settings'),
+      '#collapsed'    => FALSE
+    );
+    $form['stock']['uc_subproduct_threshold_low'] = array(
+      '#type'          => 'textfield',
+      '#title'         => t('Stock level threshold - low'),
+      '#default_value' => variable_get('uc_subproduct_threshold_low', -10),
+      '#size'          => 10,
+      '#description'   => t('Enter the low stock level threshold for determining the stock level message
+                            to display in the table. Values below this will trigger the back order message.
+                            Values equal to or above this will trigger the out of stock message.
+                            Note that if stock handling is not active for an item, the in stock message will display'),
+      '#maxlength'     => 128,
+      '#required'      => TRUE,
+    );
+    $form['stock']['uc_subproduct_threshold_high'] = array(
+      '#type'          => 'textfield',
+      '#title'         => t('Stock level threshold - normal'),
+      '#default_value' => variable_get('uc_subproduct_threshold_high', 0),
+      '#size'          => 10,
+      '#description'   => t('Enter the normal stock level threshold for determining the stock level message
+                            to display in the table. Values below this will trigger the out of stock message.
+                            Values equal to or above this will trigger the in stock message.
+                            Note that if stock handling is not active for an item, the in stock message will display'),
+      '#maxlength'     => 128,
+      '#required'      => TRUE,
+    );
+    foreach ($types as $key => $details) {
+      list ($label, $message) = $details;
+      $form['stock']['uc_subproduct_'. $key .'_message'] = array(
+        '#type'          => 'textfield',
+        '#title'         => t('Caption for !type', array('!type' => $label)),
+        '#default_value' => variable_get('uc_subproduct_'. $key .'_message', $message),
+        '#size'          => 60,
+        '#description'   => t("Enter the label to show when stock is '!label'", array('!label' => $label)),
+        '#maxlength'     => 128,
+        '#required'      => TRUE,
+      );
+    }
+  }
+  return system_settings_form($form);
+}
+
+/**
+ * Form builder to build the cart form w/ buttons etc
+ * @param $form_state array standard FAPI form state var
+ * @param $node object node object being rendered
+ * @param $nodes array array of nodes to be included in form
+ * @return array standard FAPI form
+ * @see theme_uc_subproduct_cart_table_form
+*/
+function uc_subproduct_cart_table_form($form_state, $node, $nodes = array()) {
+  $form = array();
+  $display = uc_subproduct_get_display($node);
+  $form['#display'] = $display;
+  $form['#nodes'] = $nodes;
+  $form['children'] = array(
+    '#tree' => TRUE
+  );
+  foreach ($nodes as $child) {
+    $form['children'][$child->nid] = uc_subproduct_child_row($child, array_key_exists('attributes', $display['columns']));
+  }
+  uasort($form['children'], 'uc_subproduct_weight_sort');
+  return $form;
+}
+
+/**
+ * Validation handler for uc_subproduct_cart_table_form
+ * @param $form array the built FAPI form
+ * @param $form_state array the current state of the form
+ *
+*/
+function uc_subproduct_cart_table_form_validate($form, &$form_state) {
+  foreach ($form_state['values']['children'] as $nid => $data) {
+    $attributes = element_children($form['children'][$nid]['attributes']);
+    if ($attributes && is_array($attributes)) {
+      foreach ($attributes as $attribute) {
+        if ($data['quantity'] && $form['children'][$nid]['attributes'][$attribute]['#uc_subproduct_required']
+            && !$data['attributes'][$attribute]) {
+          form_set_error('children]['. $nid .'][attributes]['. $attribute,
+                         t('@fieldname is required', array('@fieldname' => $form['children'][$nid]['attributes'][$attribute]['#title'])));
+        }
+      }
+    }
+    if (!is_numeric($data['quantity'])) {
+      form_set_error('children]['. $nid .'][quantity', t('You must enter a number'));
+    }
+  }
+}
+
+/**
+ * Submission handler for uc_subproduct_cart_table_form
+ * @param $form array the built FAPI form
+ * @param $form_state array the current state of the form
+ *
+*/
+function uc_subproduct_cart_table_form_submit($form, &$form_state) {
+  $add = array();
+  //we collect the values first so the redirect happens last
+  foreach ($form_state['values']['children'] as $nid => $data) {
+    if ($data['quantity'] > 0) {
+      $details = array_merge($data, array(
+        'nid' => $nid,
+        'qty' => $data['quantity'],
+        'node' => node_load($nid)
+      ));
+      $goto = uc_cart_add_item($nid, $details['qty'], module_invoke_all('add_to_cart_data', $details), NULL, variable_get('uc_cart_add_item_msg', TRUE), TRUE, TRUE);
+    }
+  }
+  if ($goto) {
+    drupal_goto($goto);
+  }
+}
+
+/**
+ * Handler to add new field to table
+*/
+function uc_subproduct_field_add_submit($form, &$form_state) {
+  $items = _uc_subproduct_form_state_to_fields($form_state);
+  $field = $form_state['values']['add_field'];
+  $fields = _uc_subproduct_get_fields($form['#node']);
+  if (!$field) {
+    drupal_set_message(t('You must choose a field to add'));
+  }
+  else {
+    // Add a new field at the end or remove it from the remove var.
+    if (isset($form_state['storage']['removed']) &&
+        is_array($form_state['storage']['removed']) &&
+        $form_state['storage']['removed'][$field]) {
+      //we've previously removed this field - allow it again
+      unset($form_state['storage']['removed'][$field]);
+    }
+    if (!isset($items[$field])) {
+      /*need to add it in (not always the case - consider field saved in db, then
+      removed then added again, in this case the add does not require the new field)*/
+      $items[$field] = array(
+        'field' => $field,
+        'title' => check_plain($fields[$field]),
+        'weight' => 0,
+      );
+    }
+  }
+  unset($form_state['submit_handlers']);
+  form_execute_handlers('submit', $form, $form_state);
+  uc_subproduct_sort_items($items);
+  $form_state['items'] = $items;
+  $form_state['rebuild'] = TRUE;
+}
+
+/**
+ * Handler to remove field from table
+*/
+function uc_subproduct_field_remove_submit($form, &$form_state) {
+  // Get the pane field for the clicked button.
+  $field = $form_state['clicked_button']['#parents'][1];
+  // Copy the form_state because unset() does not work on variable
+  // that is passed by reference.
+  $form_state_copy = $form_state;
+  $remove = $form_state_copy['values']['uc_subproduct_display'][$field];
+  unset($form_state_copy['values']['uc_subproduct_display'][$field]);
+  $items = _uc_subproduct_form_state_to_fields($form_state_copy);
+  unset($form_state['submit_handlers']);
+  form_execute_handlers('submit', $form, $form_state);
+  $form_state['items'] = $items;
+  if (is_array($form_state['storage']['removed'])) {
+    $form_state['storage']['removed'][$field] = $field;
+  }
+  else {
+    $form_state['storage']['removed'] = array($field => $field);
+  }
+  $form_state['rebuild'] = TRUE;
+
+}
+
+/**
+ * -----------------------------------------------------------------------------
+ * Utilities
+ * -----------------------------------------------------------------------------
+*/
+
+/**
+ * Utility to fetch the formatter function for a displayed field
+ * @param $field string field name
+ * @param $node object the node object being displayed
+ * @return string function name to pass field object to
+*/
+function _uc_subproduct_formatter($field, $node) {
+
+  foreach (module_implements('uc_subproduct_fields') as $module) {
+    $function = $module .'_uc_subproduct_fields';
+    if (function_exists($function)) {
+      $fields = $function($node);
+      if (in_array($field, array_keys($fields)) &&
+          ($formatter = $module .'_uc_subproduct_formatter') &&
+          function_exists($formatter)) {
+        return $formatter;
+      }
+    }
+  }
+
+  return 'uc_subproduct_check_plain';
+}
+
+/**
+ * Utility to fetch the display details for a node
+ * @param $node object the node object
+ * @return array of display fields
+*/
+function uc_subproduct_get_display($node) {
+  $display = array();
+  //fetch our values for the node
+  if (variable_get('uc_subproduct_enabled_'. $node->type, FALSE)) {
+    //only fetch if enabled
+    $headers = $columns = array();
+    foreach ($node->uc_subproduct_display as $field => $display) {
+      $headers[] = check_plain($display['title']);
+      $columns[$field] = _uc_subproduct_formatter($field, $node);
+    }
+    $display = array('headers' => $headers, 'columns' => $columns);
+  }
+
+  if (!count($display)) {
+    //defaults
+    $display = array(
+      'headers' => array(
+        t('Title'),
+        t('Quantity')
+      ),
+      'columns' => array(
+        'title' => 'uc_subproduct_check_plain'
+      )
+    );
+  }
+  return $display;
+}
+
+/**
+ * Utility to provide the display settings form for the node editing form
+ * @param $form array the main form
+ * @param $form_state array the std FAPI form_state var
+ * @param $node object the node being edited
+ *
+*/
+function _uc_subproduct_node_form(&$form, $form_state, $node) {
+
+  //the display table
+  if (!$form_state['storage']['removed']) {
+    $form_state['storage']['removed'] = array();
+  }
+  else {
+    drupal_set_message(t('Changes to removed items will not be made permanent until the page is saved.'));
+  }
+
+  $form['#cache'] = TRUE;
+
+
+  $items = $node->uc_subproduct_display;
+  if (empty($items)) {
+    $items = array(
+      'title' => array(
+        'weight' => 1,
+        'field' => 'title',
+        'title' => t('Title')
+      ),
+      'quantity' => array(
+        'weight' => 2,
+        'field' => 'quantity',
+        'title' => t('Quantity')
+      ),
+      'cart' => array(
+        'weight' => 3,
+        'field' => 'cart',
+        'title' => t('Add to cart')
+      ),
+    );
+  }
+  // the contents of $panes will either come from the db or from $form_state
+  if (isset($form_state['items'])) {
+    $items = $form_state['items'] + (array)$items;
+  }
+
+  $form['uc_subproduct'] = array(
+    '#type'         => 'fieldset',
+    '#collapsible'  => TRUE,
+    '#title'        => t('Sub product display'),
+    '#collapsed'    => FALSE,
+    '#weight'       => 0,
+    '#group'        => 'uc_subproduct',
+  );
+
+  $form['uc_subproduct']['items_wrapper'] = array(
+    '#tree' => FALSE,
+    '#weight' => -3,
+    '#prefix' => '<div class="clear-block" id="uc-subproduct-items-wrapper">',
+    '#suffix' => '</div>',
+  );
+
+  $form['uc_subproduct']['items_wrapper']['uc_subproduct_display'] = array(
+    '#tree' => TRUE,
+    '#prefix' => '<div id="uc-subproduct-items">',
+    '#suffix' => '</div>',
+    '#theme' => 'uc_subproduct_form_items',
+  );
+
+  $all_fields = $fields = _uc_subproduct_get_fields($node);
+
+  // Add the current panes to the form.
+  foreach ($items as $field => $item) {
+    if (in_array($field, $form_state['storage']['removed'])) {
+      continue; //don't do the removed ones
+    }
+    $form['uc_subproduct']['items_wrapper']['uc_subproduct_display'][$field] = _uc_subproduct_node_form_row($item, $all_fields);
+  }
+
+  //strip those in list already
+  foreach ($items as $item) {
+    unset($fields[$item['field']]);
+  }
+
+  $form['uc_subproduct']['items_wrapper']['add_field'] = array(
+    '#type' => 'select',
+    '#title' => t('Add field'),
+    '#options' => $fields,
+    '#description' => t('Choose a field to add to the display'),
+  );
+
+  $form['uc_subproduct']['items_wrapper']['add_another'] = array(
+    '#type' => 'submit',
+    '#value' => t('Add to display'),
+    '#attributes' => array('class' => 'uc-subproduct-new-item',
+                           'title' => t('Click here to add this field to the display.')),
+    '#submit' => array('uc_subproduct_field_add_submit'), // If no javascript action.
+    '#ahah' => array(
+      'path' => 'uc-subproduct/ahah/uc_subproduct/items_wrapper',
+      'wrapper' => 'uc-subproduct-items-wrapper',
+      'method' => 'replace',
+      'effect' => 'fade',
+    ),
+  );
+  return $form;
+}
+
+/**
+ * Utility to fetch available fields for a node
+ * @param $node object the node object
+*/
+function _uc_subproduct_get_fields($node) {
+  $fields = module_invoke_all('uc_subproduct_fields', $node);
+  return $fields;
+}
+
+/**
+ * Provides form elements for a row in the formatter table
+ * @param $item array item details
+ * @param $fields array array of field_name => field_title fields that can be displayed
+ * @return array FAPI form
+*/
+function _uc_subproduct_node_form_row($item, $fields) {
+  static $weights;//static for performance
+
+  $form['#tree'] = TRUE;
+  $field = $item['field'];
+
+  $form['field'] = array(
+    '#type' => 'value',
+    '#value' => $item['field']
+  );
+
+  $form['field_display'] = array(
+    '#value' => check_plain($fields[$item['field']]),
+  );
+
+  //title
+  $form['title'] = array(
+    '#type' => 'textfield',
+    '#size' => 50,
+    '#attributes' => array('class' => 'uc-subproduct-title-field'),
+    '#default_value' => check_plain($item['title']),
+    '#maxlength' => 50
+  );
+
+  if (empty($weights)) {
+    $weights = drupal_map_assoc(range(-50, 50));
+  }
+
+  //weight
+  $form['weight'] = array(
+    '#type' => 'select',
+    '#default_value' => $item['weight'],
+    '#options' => $weights
+  );
+
+  if (!in_array($item['field'], array('quantity', 'cart'))) {
+    $form['remove'] = array(
+      '#type' => 'submit',
+      '#prefix' => '<div>',
+      '#suffix' => '<label for="edit-remove">'. t('Remove') .'</label></div>',
+      '#value' => 'remove_'. $field,
+      '#attributes' => array('class' => 'delete-item', 'title' => t('Click here to delete this item.')),
+      '#submit' => array('uc_subproduct_field_remove_submit'),
+      '#ahah' => array(
+        'path' => 'uc-subproduct/ahah/uc_subproduct/items_wrapper',
+        'wrapper' => 'uc-subproduct-items-wrapper',
+        'method' => 'replace',
+        'effect' => 'fade',
+      ),
+    );
+  }
+  else {
+    $form['remove'] = array(
+      '#value' => t('N/A')
+    );
+  }
+
+  return $form;
+}
+
+
+/**
+ * Utility to build a child row for the table
+ * @param $node object the node object to form the row
+ * @param $show_attributes boolean show the attributes field?
+*/
+function uc_subproduct_child_row($node, $show_attributes = FALSE) {
+  //get our node ready
+  $fields = array(
+    '#weight' => $node->ordering
+  );
+  //add the qty field
+  $fields['quantity'] = array(
+    '#type'          => 'checkbox', // Changed by Vivek - Original Value - "textfield"
+    '#default_value' => 0,//$node->default_qty ? $node->default_qty : 0, // from uc_product?
+    '#size'          => 10,
+    '#maxlength'     => 4, //add 9999 max
+    '#required'      => TRUE,
+    '#id'      	     => $node->sell_price,  // Added by Vivek     
+  );
+  //add the add to cart field
+  $fields['cart'] = array(
+    '#type' => 'submit',
+    '#prefix' => '<div>',
+    '#suffix' => '<label for="edit-cart">'. t('Add to cart') .'</label></div>',
+    '#value' => t('Add to cart'),
+    '#attributes' => array('class' => 'uc-subproduct-cart', 'title' => t('Click here to add the chosen products to the cart.')),
+  );
+
+  if (module_exists('uc_attribute') && $show_attributes) {
+    $fields['attributes'] = _uc_attribute_alter_form($node);
+    if (($attributes = element_children($fields['attributes'])) &&
+        is_array($attributes) &&
+        count($attributes) > 0) {
+      foreach ($attributes as $attribute) {
+        if ($fields['attributes'][$attribute]['#required']) {
+          //remove the required condition (save it for later first)
+          $fields['attributes'][$attribute]['#uc_subproduct_required'] = TRUE;
+          $fields['attributes'][$attribute]['#required'] = FALSE;
+        }
+      }
+    }
+
+    if (is_array($fields['attributes'])) {
+      $fields['attributes']['#tree'] = TRUE;
+    }
+  }
+
+  return $fields;
+}
+
+/**
+ * Generic ahah handler
+*/
+function uc_subproduct_ahah() {
+  module_load_include('inc', 'node', 'node.pages');
+  //get args
+  $elements = func_get_args();
+  $form_state = array('storage' => NULL, 'submitted' => FALSE);
+  $form_build_id = $_POST['form_build_id'];
+  $form = form_get_cache($form_build_id, $form_state);
+  $args = $form['#parameters'];
+  $form_id = array_shift($args);
+  $form['#post'] = $_POST;
+  $form_state['post'] = $_POST;
+  drupal_process_form($form_id, $form, $form_state);
+  $form = drupal_rebuild_form($form_id, $form_state, $args, $form_build_id);
+  foreach ($elements as $element) {
+    $form = $form[$element];
+  }
+  if (!$form) {
+    watchdog('UC Sub Product', 'Ahah method was called with elements not found in resultant form', array(), WATCHDOG_ERROR);
+    $form = array(
+      'error' => array(
+        '#value' => t('An error occured while processing your request, please try again. If the problem persists, please contact the site administrator')
+      )
+    );
+  }
+  unset($form['#prefix'], $form['#suffix']); // Prevent duplicate wrappers.
+  $javascript = drupal_add_js(NULL, NULL, 'header');
+  // Loop through the JS settings and find the settings needed for our buttons.
+  $new_ahah_settings = array();
+  if (isset($javascript['setting'])) {
+    foreach ($javascript['setting'] as $settings) {
+      if (isset($settings['ahah'])) {
+        foreach ($settings['ahah'] as $id => $ahah_settings) {
+            $new_ahah_settings[$id] = $ahah_settings;
+        }
+      }
+    }
+  }
+
+  // Add the AHAH settings needed for our new elements.
+  if (!empty($new_ahah_settings)) {
+    $output = '<script type="text/javascript">jQuery.extend(Drupal.settings.ahah, '. drupal_to_js($new_ahah_settings) .');</script>';
+  }
+
+  drupal_json(array(
+    'status'   => TRUE,
+    'data'     => theme('status_messages') . $output . drupal_render($form),
+    'settings' => call_user_func_array('array_merge_recursive', $javascript['setting'])
+  ));
+}
+
+/**
+ * Util to convert form_state to array of items
+ * @param $form_state array form state variable from form handlers
+*/
+function _uc_subproduct_form_state_to_fields($form_state) {
+  $items = $form_state['values']['uc_subproduct_display'];
+  $weights = array();
+  uc_subproduct_sort_items($items);
+  return $items;
+}
+
+/**
+ * Utility to sort fields based on weight
+ * @param $items array array of items keyed by field
+*/
+function uc_subproduct_sort_items(&$items) {
+  if (is_array($items)) {
+    foreach ($items as $field => $item) {
+      $weights[$field] = $item['weight'];
+    }
+    array_multisort($weights, SORT_ASC, $items);
+  }
+}
+
+/**
+ * Util wrapper to check_plain that accepts two arguments!
+ * @param $field string field name
+ * @param $node object child product
+ * @return string
+*/
+function uc_subproduct_check_plain($field, $node) {
+  return check_plain($node->{$field});
+}
+
+/**
+ * Sort fields by weight
+ * @param $a array field 1
+ * @param $b array field 2
+*/
+function uc_subproduct_weight_sort($a, $b) {
+  if ($a['#weight'] == $b['#weight']) {
+    return 0;
+  }
+  return ($a['#weight'] > $b['#weight']) ? 1 : -1;
+}
+
+/**
+ * Sort product by sell_price
+ * @param $a array product 1
+ * @param $b array product 2
+*/
+function uc_subproduct_sell_price_sort($a, $b) {
+  if ($a['sell_price'] == $b['sell_price']) {
+    return 0;
+  }
+  return ($a['sell_price'] > $b['sell_price']) ? 1 : -1;
+}
+
+/**
+ * Sort product by ordering
+ * @param $a array product 1
+ * @param $b array product 2
+*/
+function uc_subproduct_ordering_sort($a, $b) {
+  if ($a['ordering'] == $b['ordering']) {
+    return 0;
+  }
+  return ($a['ordering'] > $b['ordering']) ? 1 : -1;
+}
+
+/**
+ * Util to fetch appropriate out of stock message
+ * @param $level float the current stock level
+ * @return string key of display message
+*/
+function _uc_subproduct_stock_message($level) {
+  //thresholds
+  $low_threshold = variable_get('uc_subproduct_threshold_low', -10);
+  $high_threshold = variable_get('uc_subproduct_threshold_high', 0);
+  if ($level >= $low_threshold && $level < $high_threshold) {
+    $display = 'out_of_stock';
+  }
+  elseif ($level >= $high_threshold) {
+    $display = 'in_stock';
+  }
+  else {
+    $display = 'back_order';
+  }
+  return $display;
+}
+
+/**
+ * Util to get node types treated as uc_subproducts
+*/
+function uc_subproduct_get_types() {
+  $types = array();
+  $res = db_query("SELECT DISTINCT type
+                  FROM {node} n INNER JOIN {uc_subproduct_display} uc
+                  ON uc.nid = n.nid");
+  while ($type = db_fetch_array($res)) {
+    if (variable_get('uc_subproduct_enabled_'. $type['type'], FALSE)) {
+      $types[] = $type['type'];
+    }
+  }
+  return $types;
+}
+
+/**
+ * Util to get products for a term
+*/
+function uc_subproduct_get_products() {
+  $tid = arg(1);
+  $products = array();
+  $types = uc_subproduct_get_types();
+  $sql = "SELECT DISTINCT(n.nid), n.sticky, n.title, n.created
+    FROM {node} n
+      INNER JOIN {term_node} tn ON n.vid = tn.vid
+    WHERE tn.tid = %d AND n.status = 1
+      AND n.type IN (". db_placeholders($types, 'varchar') .") ";
+
+  $sql = db_rewrite_sql($sql);
+  $result = db_query($sql, array_merge(array($tid), $types));
+  while ($node = db_fetch_object($result)) {
+    $products[] = $node->nid;
+  }
+  return $products;
+}
+
+/**
+ * Util to get from price from child products
+ * @param $node object the parent node object
+ * @return float the from price
+*/
+function uc_subproduct_get_from_price($node) {
+  // find CCK nodereference field tables
+  // search through them for matching node ids and load those nodes
+  $children = array();
+  $types = content_types();
+  $type = $types[$node->type];
+
+  // Find the table and columns to search through
+  $search_tables = array();
+
+  foreach ($type['fields'] as $field) {
+    if ($field['type'] == 'nodereference'
+        && $field['display_settings']['full']['format'] == 'cart_table_form') {
+      $db_info = content_database_info($field);
+      $search_tables[$db_info['table']][] = $db_info['columns']['nid']['column'];
+    }
+  }
+  foreach ($search_tables as $table => $columns) {
+    foreach ($columns as $column) {
+      $query = "SELECT DISTINCT(f.". $column .") AS nid,
+                  p.sell_price,
+                  p.ordering
+                FROM {node} n
+                LEFT JOIN {". $table ."} f
+                ON n.nid = f.". $column ."
+                LEFT JOIN {node} n2
+                ON f.vid = n2.vid /* this limits to current revision */
+                INNER JOIN {uc_products} p
+                ON n.vid = p.vid
+                WHERE n2.nid = %d
+                /*AND n.status = 1*/";
+      $ids = db_query(db_rewrite_sql($query), $node->nid);
+      while ($data = db_fetch_array($ids)) {
+        $children[$data['nid']] = $data;
+      }
+    }
+  }
+  $sort = variable_get('uc_subproduct_from_price', 0);
+  if (is_array($children)) {
+    if ($sort) {
+      uasort($children, 'uc_subproduct_sell_price_sort');
+    }
+    else {
+      uasort($children, 'uc_subproduct_ordering_sort');
+    }
+
+    $first = array_shift($children);
+    return $first['sell_price'];
+  }
+  else {
+    return 0;
+  }
+}
+
+/**
+ * Get array of nids for nodes that reference a particular node
+ * @param $node object the node being referenced
+ * @return array
+*/
+function uc_subproduct_get_referenced_in($node) {
+  // find CCK nodereference field tables
+  // search through them for matching node ids and load those nodes
+  $referenced = array();
+  $types = content_types();
+
+  // Find the table and columns to search through, if the same
+  // table comes up in more than one content type, we only need
+  // to search it once.
+  $search_tables = array();
+  foreach ($types as $type_name => $type) {
+    foreach ($type['fields'] as $field) {
+      if ($field['type'] == 'nodereference') {
+        $db_info = content_database_info($field);
+        $search_tables[$db_info['table']][] = $db_info['columns']['nid']['column'];
+      }
+    }
+  }
+  foreach ($search_tables as $table => $columns) {
+    foreach ($columns as $column) {
+      $ids = db_query(db_rewrite_sql("SELECT DISTINCT(n.nid),
+                                     n.title, n.type FROM {node} n
+                                     LEFT JOIN {". $table ."} f
+                                     ON n.vid = f.vid
+                                     WHERE f.". $column ."=". $node->nid. "
+                                     AND n.status = 1"));
+      while ($data = db_fetch_object($ids)) {
+        $referenced[$data->nid] = $data->title;
+      }
+    }
+  }
+  return $referenced;
+}
+
+/**
+ * -----------------------------------------------------------------------------
+ * Hooks
+ * -----------------------------------------------------------------------------
+*/
+/**
+ * Notify uc_subproduct of additional fields for display in the table
+ * uc_subproduct handles basic Ubercart fields and CCK fields
+ * Modules use this hook to define additional fields
+ * The keys (field_name) must correspond with members of the node object
+ * eg node->weight would use key weight
+ * You control the format of the output field with hook_uc_subproduct_formatter
+ * which takes two arguments,
+ * the name of the field and the node object
+ * @param $node object the node object being edited
+ * @return array of form array(field_name => field_title, field_name => field_title, ...)
+*/
+function hook_uc_subproduct_fields($node) {
+  $fields = array();
+  $fields['field_name_1'] = t('Field Title 1');
+  $fields['field_name_2'] = t('Field Title 2');
+  return $fields;
+}
+
+/**
+ * Format your custom field for output
+ * @param $field string field name to be output
+ * @param $node object the child product object
+*/
+function hook_uc_subproduct_formatter($field, $node) {
+  return check_plain($node->{$field});
+}

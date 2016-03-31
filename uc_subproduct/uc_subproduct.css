@@ -1,0 +1,40 @@
+/*
+ * $Id: uc_subproduct.css,v 1.2 2010/12/15 21:17:32 larowlan Exp $
+ * @file uc_subproduct.css
+ * Provides the css to theme the cart buttons as baskets or otherwise
+ * @copyright Copyright(c) 2010 Lee Rowlands
+ * @license GPL v2 http://www.fsf.org/licensing/licenses/gpl.html
+ * @author Lee Rowlands leerowlands at rowlands-bcs dot com
+ *
+ */
+input.uc-subproduct-cart {
+  text-indent: -10000%;
+  border: none;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  margin: 0;
+  background: transparent url(./cart.png) no-repeat 0 0;
+}
+td.uc-subproduct-cart {
+  padding: 0;
+}
+.uc-subproduct-cart label {
+  display: none;
+}
+.uc-subproduct-remove input {
+  text-indent: -10000%;
+  border: none;
+  cursor: pointer;
+  width: 16px;
+  background: transparent url(delete.png) no-repeat 0 0;
+}
+.uc-subproduct-strikeout * {
+  text-decoration: line-through;
+}
+.uc-subproduct-product-list .price-prefixes,
+.uc-subproduct-product-list .form-item label,
+.uc-subproduct-product-list .field-label {
+  display: none;
+}

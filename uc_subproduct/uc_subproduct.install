@@ -1,0 +1,112 @@
+<?php
+// $Id: uc_subproduct.install,v 1.2 2010/12/15 21:17:32 larowlan Exp $
+/*
+ * @file uc_subproduct.install
+ * Sets up the db for the formatter details etc
+ * @copyright Copyright(c) 2010 Lee Rowlands
+ * @license GPL v2 http://www.fsf.org/licensing/licenses/gpl.html
+ * @author Lee Rowlands leerowlands at rowlands-bcs dot com
+ *
+ */
+
+/**
+ * Implementation of hook_schema().
+ */
+function uc_subproduct_schema() {
+  $schema = array();
+  $schema['uc_subproduct_display'] = array(
+    'description' => 'Stores display details for uc_subproduct',
+    'fields'      => array(
+      'id' => array(
+        'description'   => 'id',
+        'type'          => 'serial',
+        'size'          => 'medium',
+        'not null'      => TRUE,
+      ),
+      'vid' => array(
+        'description'   => 'vid of parent node',
+        'type'          => 'int',
+        'size'          => 'medium',
+        'not null'      => TRUE,
+      ),
+      'nid' => array(
+        'description'   => 'nid of parent node',
+        'type'          => 'int',
+        'size'          => 'medium',
+        'not null'      => TRUE,
+      ),
+      'title' => array(
+        'description'   => 'title of column',
+        'type'          => 'varchar',
+        'size'          => 'normal',
+        'not null'      => TRUE,
+        'length'        => 50
+      ),
+      'field' => array(
+        'description'   => 'field to display, either cck or built in Ubercart',
+        'type'          => 'varchar',
+        'size'          => 'normal',
+        'not null'      => TRUE,
+        'length'        => 255
+      ),
+      'weight' => array(
+        'description'   => 'weight (sort order) of columns',
+        'type'          => 'int',
+        'size'          => 'medium',
+        'not null'      => TRUE,
+        'default'       => 0
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'uc_subproduct_display_vid_ix' => array('vid'),
+      'uc_subproduct_display_nid_ix' => array('nid'),
+      'uc_subproduct_display_weight_ix' => array('weight'),
+    )
+);
+  return $schema;
+}
+
+
+/**
+ * Implementation of hook_install().
+ */
+function uc_subproduct_install() {
+  drupal_install_schema('uc_subproduct');
+}
+
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function uc_subproduct_uninstall() {
+  drupal_uninstall_schema('uc_subproduct');
+}
+
+
+/**
+ * Implementation of hook_update_N
+ * Remove duplicates from table created prior to indexing fields
+ * by field name instead of number
+*/
+function uc_subproduct_update_6101() {
+  $ret = array();
+  $res = db_query("SELECT * FROM {uc_subproduct_display}");
+  $nodes = $duplicates = array();
+  while ($field = db_fetch_object($res)) {
+    if (!isset($nodes[$field->vid])) {
+      $nodes[$field->vid] = array();
+    }
+    if (!isset($nodes[$field->vid][$field->field])) {
+      $nodes[$field->vid][$field->field] = TRUE;
+    }
+    else {
+      $duplicates[] = $field->id;
+    }
+  }
+  $query = "DELETE FROM {uc_subproduct_display}
+            WHERE id IN (". db_placeholders($duplicates) .")";
+  $result = db_query($query, $duplicates);
+  $ret[] =array('success' => $result !== FALSE, 'query' => check_plain($query));
+  return $ret;
+}
